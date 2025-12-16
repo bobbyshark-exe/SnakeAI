@@ -2,5 +2,6 @@ __pycache__/
 *.pyc
 model/
 *.png
+!dashboard.png
 training.png
 nn_activations_*.png
