@@ -7,8 +7,8 @@ import numpy as np
 from collections import namedtuple
 
 pygame.init()
-#setup font for score display.
-font = pygame.font.Font('arial.ttf', 25)
+#setup font for score display (use system font for portability).
+font = pygame.font.SysFont('arial', 25)
 
 #Enum makes reading code easier (Right=1, Left=2, etc.
 class Direction(enum.Enum):
@@ -22,16 +22,21 @@ Point = namedtuple('Point', 'x, y')
 
 #Constants
 BLOCK_SIZE = 20
-SPEED = 40  #speed of the game (Higher = faster training)
+SPEED = 100000  #speed of the game (Higher = faster training)
 
 class SnakeGameAI:
-    def __init__(self, w=640, h=480):
+    def __init__(self, w=640, h=480, visual=True):
         self.w = w
         self.h = h
+        self.visual = visual
         #init Pygame window
-        self.display = pygame.display.set_mode((self.w, self.h))
-        pygame.disply.set_caption('Snake AI')
-        self.clock = pygame.time.Clock()
+        if self.visual:
+            self.display = pygame.display.set_mode((self.w, self.h))
+            pygame.display.set_caption('Snake AI')
+            self.clock = pygame.time.Clock()
+        else:
+            self.display = None
+            self.clock = None
         self.reset()
 
     def reset(self):
@@ -67,10 +72,13 @@ class SnakeGameAI:
     def play_step(self, action):
         self.frame_iteration += 1
         #1. Handle Window Events(ALlows you to click X to close)
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit()
-                quit()
+        if self.visual:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    quit()
+        # Distance to food before move (Manhattan)
+        dist_old = abs(self.head.x - self.food.x) + abs(self.head.y - self.food.y)
         #2. Move the snake
         self._move(action) #updates the head pos based on direction
         self.snake.insert(0, self.head) #add new head to the snake body
@@ -81,27 +89,34 @@ class SnakeGameAI:
 
         #Collision Check:
         #if hits wall, hits self, or takes too long (starvation protection)
-        if self.is_colision() or self.frame_iteration > 100*len(self.snake):
+        if self.is_collision() or self.frame_iteration > 100*len(self.snake):
             game_over = True
-            reward = -10 #Big penalty for dying
+            reward = -50 #Big penalty for dying
             return reward, game_over, self.score
         
         #4. Check food
         if self.head == self.food:
             self.score += 1
-            reward = 10 # big reward for eating food
+            reward = 50 # big reward for eating food
             self._place_food()
         else:
             #If snake didn't eat food, remove the tail (snake moves forward)
             self.snake.pop() 
+            # Reward shaping: small reward for moving closer to food
+            dist_new = abs(self.head.x - self.food.x) + abs(self.head.y - self.food.y)
+            if dist_new < dist_old:
+                reward += 0.1
+            elif dist_new > dist_old:
+                reward -= 0.1
         
         #5. Update UI and clock
-        self._update_ui()
-        self.clock.tick(SPEED)
+        if self.visual:
+            self._update_ui()
+            self.clock.tick(SPEED)
 
         return reward, game_over, self.score
     
-    def is_colision(self, pt=None):
+    def is_collision(self, pt=None):
         if pt is None:
             pt = self.head
         #Check boundry collision (hit the walls)
@@ -113,6 +128,8 @@ class SnakeGameAI:
         return False
     
     def _update_ui(self):
+        if not self.visual:
+            return
         self.display.fill((0,0,0)) #fill screen with black
 
         # Draw Snake (Green)

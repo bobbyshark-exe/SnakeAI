@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+model/
+*.png
+training.png
+nn_activations_*.png

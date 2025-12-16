@@ -1,30 +1,35 @@
-# SnakeAI: Deep Q-Learning with PyTorch
+# SnakeAI — Deep Q-Learning (PyTorch)
 
-A reinforcement learning agent that teaches itself to play Snake using a Linear Q-Network (Deep Q-Learning).
+Self-learning Snake agent with a compact DQN, headless training speed, and a live visual game window.
 
-## 🧠 The Architecture (Neural Network)
-The AI does not know the rules of Snake. It learns by "looking" at the state of the game and adjusting its neural weights to maximize a reward function.
+## Model
+- State (11 features): danger straight/right/left, one-hot direction, food relative position.
+- Network: 11 → 256 (ReLU) → 3 (Q-values for Straight, Right, Left).
+- Loss/optimizer: MSE + Adam. Discount $\gamma = 0.9$.
 
-* **Input Layer (11 Neurons):** Perception (Danger Straight/Right/Left, Current Direction, Food Location).
-* **Hidden Layer (256 Neurons):** ReLU activation for non-linear decision making.
-* **Output Layer (3 Neurons):** Action probabilities (Straight, Right, Left).
+## Rewards
+- Eat food: +50
+- Die: -50
+- Move closer to food: +0.1; farther: -0.1
+- Starvation guard: terminate if steps exceed 100 × length.
 
-## 📐 The Math (Bellman Equation)
-The model is trained using the **Bellman Equation** to minimize the loss between the predicted Q-value and the target Q-value:
+## Run
+```bash
+pip install torch pygame matplotlib numpy
+python agent.py
+```
+- Runs 3 environments; only the first is visual so you see the snake, others stay headless for speed.
+- `dashboard.png` is regenerated each game (training curve + network view + current board). Delete or gitignore PNGs if keeping the repo clean.
 
-$$Q_{new}(s,a) = R + \gamma \max(Q(s', a'))$$
+## Notes
+- Checkpoints: `model/model.pth` and `model/memory.pkl` persist across runs.
+- Epsilon anneals over the first ~200 games for faster early exploration.
+- CPU by default; switch device in `model.py` when ready for GPU.
 
-* **$R$**: Reward (Food: +10, Death: -10, Else: 0)
-* **$\gamma$**: Discount factor (0.9), prioritizing future rewards.
-* **Optimization**: Adam Optimizer using Mean Squared Error (MSE) Loss.
+## Findings (recent run)
+- Record score: 54 at ~200 games (3-env training, first env visual).
+- Replay buffer restored ~100k experiences on resume; checkpoints proven to load/save cleanly.
+- Dashboard updates every game; PNGs are regenerated and safe to gitignore.
 
-## 🚀 How to Run
-1.  Install dependencies:
-    ```bash
-    pip install torch pygame matplotlib numpy
-    ```
-2.  Run the training agent:
-    ```bash
-    python agent.py
-    ```
-3.  Watch the graph! The agent will start random (epsilon-greedy) and gradually improve as `n_games` increases.
+## Sample dashboard
+![Dashboard](dashboard.png)

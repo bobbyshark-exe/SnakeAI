@@ -1,10 +1,15 @@
+"""DQN agent orchestrating multi-env training and live metrics capture."""
 import torch
 import random
 import numpy as np
+import matplotlib.pyplot as plt
+import pickle
+import os
 from collections import deque
 from game import SnakeGameAI, Direction, Point
 from model import Linear_QNet, QTrainer
 from helper import plot
+from visualizer import NNVisualizer
 
 MAX_MEMORY = 100_000
 BATCH_SIZE = 1000
@@ -18,6 +23,34 @@ class Agent:
         self.memory = deque(maxlen=MAX_MEMORY) # popleft() if memory exceeds limit
         self.model = Linear_QNet(11, 256, 3) # 11 Inputs, 256 Hidden, 3 Outputs
         self.trainer = QTrainer(self.model, lr=LR, gamma=self.gamma)
+        # Load pre-trained model and memory
+        self.load_checkpoint()
+
+    def load_checkpoint(self):
+        """Load pre-trained model weights and replay memory"""
+        # Load model
+        if self.model.load():
+            print("✓ Loaded pre-trained model")
+        
+        # Load memory
+        memory_file = './model/memory.pkl'
+        if os.path.exists(memory_file):
+            try:
+                with open(memory_file, 'rb') as f:
+                    saved_memory = pickle.load(f)
+                    self.memory = deque(saved_memory, maxlen=MAX_MEMORY)
+                    print(f"✓ Loaded replay memory with {len(self.memory)} experiences")
+            except Exception as e:
+                print(f"Could not load memory: {e}")
+    
+    def save_checkpoint(self):
+        """Save model weights and replay memory"""
+        # Memory is saved whenever model is saved
+        if not os.path.exists('./model'):
+            os.makedirs('./model')
+        memory_file = './model/memory.pkl'
+        with open(memory_file, 'wb') as f:
+            pickle.dump(list(self.memory), f)
 
     def get_state(self, game):
         head = game.snake[0]
@@ -91,62 +124,92 @@ class Agent:
         # Epsilon-Greedy Strategy:
         # In the beginning, make random moves to explore.
         # As games increase, make fewer random moves and use the Brain.
-        self.epsilon = 80 - self.n_games
+        # More aggressive exploration early on
+        self.epsilon = max(0, 200 - self.n_games)  # Explore for first 200 games
         final_move = [0,0,0]
         
         if random.randint(0, 200) < self.epsilon:
             move = random.randint(0, 2)
-            final_move[move] = 1 # Random Move
+            final_move[move] = 1 # Random exploration
         else:
             state0 = torch.tensor(state, dtype=torch.float)
             prediction = self.model(state0)
             move = torch.argmax(prediction).item()
-            final_move[move] = 1 # Predicted Move
+            final_move[move] = 1 # Use learned model
             
         return final_move
 
-def train():
+def train(num_envs=3, visual=True):
+    import signal
+    
     plot_scores = []
     plot_mean_scores = []
     total_score = 0
     record = 0
     agent = Agent()
-    game = SnakeGameAI()
+    games = [SnakeGameAI(visual=(visual and idx == 0)) for idx in range(num_envs)]
+    visualizer = NNVisualizer(agent.model)
     
+    def save_on_exit(sig, frame):
+        """Save memory and model on Ctrl+C"""
+        print("\n\n💾 Saving checkpoint on exit...")
+        agent.save_checkpoint()
+        print(f"✓ Saved at Game {agent.n_games}")
+        exit(0)
+    
+    # Register Ctrl+C handler
+    signal.signal(signal.SIGINT, save_on_exit)
+
     while True:
-        # 1. Get current state
-        state_old = agent.get_state(game)
+        states_old = [agent.get_state(g) for g in games]
+        moves = [agent.get_action(s) for s in states_old]
 
-        # 2. Get move
-        final_move = agent.get_action(state_old)
+        step_results = [g.play_step(a) for g, a in zip(games, moves)]
+        rewards, dones, scores = zip(*step_results)
+        states_new = [agent.get_state(g) for g in games]
 
-        # 3. Perform move and get new state
-        reward, done, score = game.play_step(final_move)
-        state_new = agent.get_state(game)
+        # Train short memory in batch
+        agent.train_short_memory(states_old, moves, rewards, states_new, dones)
+        # Remember batch
+        for s0, a, r, s1, d in zip(states_old, moves, rewards, states_new, dones):
+            agent.remember(s0, a, r, s1, d)
 
-        # 4. Train Short Memory (Train on step)
-        agent.train_short_memory(state_old, final_move, reward, state_new, done)
-
-        # 5. Remember (Store in replay memory)
-        agent.remember(state_old, final_move, reward, state_new, done)
-
-        if done:
-            # 6. Game Over: Train Long Memory (Replay Experience) & Plot
-            game.reset()
-            agent.n_games += 1
-            agent.train_long_memory()
-            
-            if score > record:
-                record = score
-                agent.model.save()
-            
-            print('Game', agent.n_games, 'Score', score, 'Record:', record)
-            
-            plot_scores.append(score)
-            total_score += score
-            mean_score = total_score / agent.n_games
-            plot_mean_scores.append(mean_score)
-            plot(plot_scores, plot_mean_scores)
+        # Handle episodes that ended; reset and bookkeeping per env
+        for i, done in enumerate(dones):
+            if done:
+                games[i].reset()
+                agent.n_games += 1
+                agent.train_long_memory()
+                score = scores[i]
+                if score > record:
+                    record = score
+                    agent.model.save()
+                    agent.save_checkpoint()  # Save memory with best model
+                # Save memory periodically (every 50 games)
+                if agent.n_games % 50 == 0:
+                    agent.save_checkpoint()
+                print('Game', agent.n_games, 'Score', score, 'Record:', record)
+                plot_scores.append(score)
+                total_score += score
+                mean_score = total_score / agent.n_games
+                plot_mean_scores.append(mean_score)
+                
+                # Update live dashboard after every game (game parameter for live game rendering)
+                fig = visualizer.plot_combined_dashboard(
+                    states_old[0], 
+                    plot_scores, 
+                    plot_mean_scores, 
+                    agent.n_games,
+                    game=games[i],  # Pass the game object for live rendering
+                    title=f"SnakeAI Live Dashboard - Game {agent.n_games} | Record: {record} | Score: {score} | Avg: {mean_score:.1f}"
+                )
+                plt.savefig('dashboard.png', dpi=80, bbox_inches='tight', facecolor='#0a0e27')
+                plt.close(fig)
+                
+                # Also save training chart for reference (legacy)
+                if agent.n_games % 10 == 0:
+                    plot(plot_scores, plot_mean_scores)
 
 if __name__ == '__main__':
-    train()
+    # Run 3 parallel simulations; only the first is visual for a clean window
+    train(num_envs=3, visual=True)
